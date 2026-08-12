@@ -1,0 +1,12 @@
+.page {
+  min-width: 0;
+}
+
+.chart-wrap {
+  width: 100%;
+  min-height: 280px;
+}
+
+.chart-wrap-scroll .recharts-wrapper {
+  min-width: 0;
+}
