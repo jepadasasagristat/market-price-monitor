@@ -455,10 +455,31 @@
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.82);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  align-self: flex-start;
 }
 
-.ph-map-legend.is-guide {
-  border-radius: var(--radius-md);
+.ph-map-tip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.55rem;
+  padding: 0.15rem 0.1rem 0;
+}
+
+.ph-map-tip-caption {
+  font-size: 0.62rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.ph-map-tip-text {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--color-text);
+  line-height: 1.4;
+  min-width: 0;
 }
 
 .ph-map-legend-caption {

@@ -289,33 +289,28 @@ export default function PhilippinesRegionMap({
         ) : null}
       </div>
 
-      <div className="ph-map-legend is-guide" aria-label={showingMarkers ? 'Map tip and price legend' : 'Map guide'}>
-        <span className="ph-map-legend-caption">Tip</span>
-        <span className="ph-map-legend-guide">{tipText}</span>
-        {showingMarkers ? (
-          <>
-            <span className="ph-map-legend-divider" aria-hidden />
-            <span className="ph-map-legend-item is-above">
-              <span className="ph-map-legend-icon" aria-hidden>
-                <svg viewBox="0 0 20 20" width="14" height="14">
-                  <circle cx="10" cy="10" r="8.2" fill="#c62828" stroke="#fff" strokeWidth="1.5" />
-                  <path d="M6.2 11.3 L10 6.4 L13.8 11.3 Z" fill="#fff" />
-                </svg>
-              </span>
-              Above
+      {showingMarkers ? (
+        <div className="ph-map-legend" aria-label="Price legend">
+          <span className="ph-map-legend-item is-above">
+            <span className="ph-map-legend-icon" aria-hidden>
+              <svg viewBox="0 0 20 20" width="14" height="14">
+                <circle cx="10" cy="10" r="8.2" fill="#c62828" stroke="#fff" strokeWidth="1.5" />
+                <path d="M6.2 11.3 L10 6.4 L13.8 11.3 Z" fill="#fff" />
+              </svg>
             </span>
-            <span className="ph-map-legend-item is-below">
-              <span className="ph-map-legend-icon" aria-hidden>
-                <svg viewBox="0 0 20 20" width="14" height="14">
-                  <circle cx="10" cy="10" r="8.2" fill="#1b7a3d" stroke="#fff" strokeWidth="1.5" />
-                  <path d="M6.2 8.7 L10 13.6 L13.8 8.7 Z" fill="#fff" />
-                </svg>
-              </span>
-              At / below
+            Above
+          </span>
+          <span className="ph-map-legend-item is-below">
+            <span className="ph-map-legend-icon" aria-hidden>
+              <svg viewBox="0 0 20 20" width="14" height="14">
+                <circle cx="10" cy="10" r="8.2" fill="#1b7a3d" stroke="#fff" strokeWidth="1.5" />
+                <path d="M6.2 8.7 L10 13.6 L13.8 8.7 Z" fill="#fff" />
+              </svg>
             </span>
-          </>
-        ) : null}
-      </div>
+            At / below
+          </span>
+        </div>
+      ) : null}
 
       {isNcr && zoomed ? (
         <div className="ph-map-city-chips" aria-label="NCR cities and municipalities">
@@ -598,6 +593,11 @@ export default function PhilippinesRegionMap({
               })
             : null}
         </svg>
+      </div>
+
+      <div className="ph-map-tip" aria-label="Map tip">
+        <span className="ph-map-tip-caption">Tip</span>
+        <span className="ph-map-tip-text">{tipText}</span>
       </div>
     </div>
   );
