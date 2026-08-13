@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { HomeIcon } from './navIcons';
+import { HomeIcon, MapPinIcon } from './navIcons';
 
 export type NavItem = {
   to: string;
@@ -20,6 +20,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Price Monitoring',
     items: [
       { to: '/', label: 'Overview', icon: <HomeIcon />, end: true },
+      { to: '/market-finder', label: 'Market Finder', icon: <MapPinIcon /> },
       // Temporarily hidden
       // { to: '/prices', label: 'Commodity Prices', icon: <TableIcon /> },
       // { to: '/markets', label: 'Markets Map', icon: <MapPinIcon /> },

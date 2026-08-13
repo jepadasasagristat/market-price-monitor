@@ -1,6 +1,7 @@
 import type { CommodityMapArea } from '@/api/prices';
 import { PH_MAP_VIEWBOX, PH_REGION_PATHS } from '@/data/phRegionPaths';
 import { PH_PROVINCES_BY_REGION } from '@/data/phProvincePaths';
+import { NCR_CITY_VIEWBOX, PH_NCR_CITY_PATHS } from '@/data/phNcrCityPaths';
 import { useAnimatedViewBox } from '@/hooks/useAnimatedViewBox';
 import { latLngToPhMapPoint } from '@/lib/phMapProjection';
 import { formatPrice } from '@/lib/format';
@@ -10,14 +11,17 @@ type PhilippinesRegionMapProps = {
   selectedProvince: string;
   availableRegions?: string[];
   availableProvinces?: string[];
+  availableCities?: string[];
   areaMarkers?: CommodityMapArea[];
+  highlightedAreaId?: string | null;
   selectedCommodityLabel?: string;
   asOfDate?: string;
+  isLoading?: boolean;
   onSelectRegion: (region: string) => void;
   onSelectProvince: (province: string) => void;
 };
 
-function regionLabel(id: string) {
+function regionShortLabel(id: string) {
   if (id === 'NCR' || id === 'CAR' || id === 'BARMM') return id;
   return id.replace('Region ', 'R');
 }
@@ -26,38 +30,152 @@ function normalizeName(value: string) {
   return value.trim().toLowerCase();
 }
 
-function findAreaTone(areas: CommodityMapArea[] | undefined, name: string) {
+function findAreaForFeature(areas: CommodityMapArea[] | undefined, featureId: string) {
   if (!areas?.length) return null;
-  const target = normalizeName(name);
-  const exact = areas.find((area) => normalizeName(area.id) === target);
-  if (exact) return exact;
+  const target = normalizeName(featureId);
   return (
-    areas.find(
-      (area) =>
-        normalizeName(area.id).includes(target) || target.includes(normalizeName(area.id)),
-    ) ?? null
+    areas.find((area) => normalizeName(area.id) === target) ??
+    areas.find((area) => normalizeName(area.name) === target) ??
+    areas.find((area) => {
+      const id = normalizeName(area.id);
+      const name = normalizeName(area.name);
+      return id.includes(target) || target.includes(id) || name.includes(target) || target.includes(name);
+    }) ??
+    null
   );
+}
+
+function isSameAreaId(highlightedAreaId: string | null | undefined, areaId: string) {
+  if (!highlightedAreaId) return false;
+  return normalizeName(highlightedAreaId) === normalizeName(areaId);
+}
+
+function parseViewBoxSize(value: string) {
+  const parts = value.split(/[\s,]+/).map(Number);
+  return {
+    width: parts[2] || 400,
+    height: parts[3] || 500,
+  };
+}
+
+function provinceLabelFontSize(viewBox: string, provinceCount: number) {
+  const { width, height } = parseViewBoxSize(viewBox);
+  const span = Math.min(width, height);
+  const density = Math.max(provinceCount, 1);
+  // Scale with zoom extent and pack density so labels stay readable without colliding.
+  const sized = span / (density * 2.05 + 18);
+  return Math.max(2.35, Math.min(3.35, sized));
+}
+
+const PROVINCE_LABEL_ALIASES: Record<string, string> = {
+  'Mountain Province': 'Mt. Province',
+  'Negros Occidental': 'Negros Occ.',
+  'Negros Oriental': 'Negros Or.',
+  'Western Samar': 'W. Samar',
+  'Northern Samar': 'N. Samar',
+  'Eastern Samar': 'E. Samar',
+  'Davao del Norte': 'Davao N.',
+  'Davao del Sur': 'Davao S.',
+  'Davao Occidental': 'Davao Occ.',
+  'Davao Oriental': 'Davao Or.',
+  'Davao de Oro': 'Davao de Oro',
+  'South Cotabato': 'S. Cotabato',
+  'North Cotabato': 'N. Cotabato',
+  'Sultan Kudarat': 'S. Kudarat',
+  'Agusan del Norte': 'Agusan N.',
+  'Agusan del Sur': 'Agusan S.',
+  'Surigao del Norte': 'Surigao N.',
+  'Surigao del Sur': 'Surigao S.',
+  'Zamboanga del Norte': 'Zambo. N.',
+  'Zamboanga del Sur': 'Zambo. S.',
+  'Zamboanga Sibugay': 'Zambo. Sib.',
+  'Camarines Norte': 'Cam. Norte',
+  'Camarines Sur': 'Cam. Sur',
+  'Misamis Occidental': 'Misamis Occ.',
+  'Misamis Oriental': 'Misamis Or.',
+  'Lanao del Norte': 'Lanao N.',
+  'Lanao del Sur': 'Lanao S.',
+  'Maguindanao del Norte': 'Mag. Norte',
+  'Maguindanao del Sur': 'Mag. Sur',
+  'Cotabato City': 'Cotabato City',
+  'Nueva Vizcaya': 'N. Vizcaya',
+  'Nueva Ecija': 'N. Ecija',
+  'Ilocos Norte': 'Ilocos N.',
+  'Ilocos Sur': 'Ilocos S.',
+};
+
+function provinceDisplayLabel(label: string) {
+  return PROVINCE_LABEL_ALIASES[label] ?? label;
+}
+
+function provinceLabelLines(label: string) {
+  const display = provinceDisplayLabel(label);
+  if (display.length <= 11 || !display.includes(' ')) return [display];
+  const words = display.split(/\s+/);
+  if (words.length === 2) return words;
+  const mid = Math.ceil(words.length / 2);
+  return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')];
+}
+
+function isNameAvailable(name: string, available: Set<string> | null) {
+  if (!available) return true;
+  const target = name.toLowerCase();
+  if (available.has(target)) return true;
+  return [...available].some((entry) => entry.includes(target) || target.includes(entry));
 }
 
 function PriceToneIcon({ tone, size }: { tone: 'above' | 'below'; size: number }) {
   const isAbove = tone === 'above';
   const fill = isAbove ? '#c62828' : '#1b7a3d';
-  const stroke = '#ffffff';
   return (
     <g>
-      <circle r={size} fill={fill} stroke={stroke} strokeWidth={size * 0.14} />
+      <circle r={size * 1.22} fill="rgba(255,255,255,0.92)" />
+      <circle r={size} fill={fill} stroke="#ffffff" strokeWidth={size * 0.16} />
       {isAbove ? (
         <path
-          d={`M ${-size * 0.28} ${size * 0.08} L 0 ${-size * 0.34} L ${size * 0.28} ${size * 0.08} Z`}
-          fill={stroke}
+          d={`M ${-size * 0.3} ${size * 0.12} L 0 ${-size * 0.36} L ${size * 0.3} ${size * 0.12} Z`}
+          fill="#fff"
         />
       ) : (
         <path
-          d={`M ${-size * 0.28} ${-size * 0.08} L 0 ${size * 0.34} L ${size * 0.28} ${-size * 0.08} Z`}
-          fill={stroke}
+          d={`M ${-size * 0.3} ${-size * 0.12} L 0 ${size * 0.36} L ${size * 0.3} ${-size * 0.12} Z`}
+          fill="#fff"
         />
       )}
     </g>
+  );
+}
+
+function ResetIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
+      <path
+        d="M4.2 10a5.8 5.8 0 0 1 9.7-4.2M15.8 10a5.8 5.8 0 0 1-9.7 4.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M14.2 3.8v3.2h-3.2M5.8 16.2v-3.2h3.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MapPinMiniIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+      <path
+        d="M8 1.6c-2.3 0-4.2 1.8-4.2 4.1 0 3.1 4.2 8.1 4.2 8.1s4.2-5 4.2-8.1C12.2 3.4 10.3 1.6 8 1.6Zm0 5.8A1.7 1.7 0 1 1 8 4a1.7 1.7 0 0 1 0 3.4Z"
+        fill="currentColor"
+      />
+    </svg>
   );
 }
 
@@ -66,49 +184,95 @@ export default function PhilippinesRegionMap({
   selectedProvince,
   availableRegions,
   availableProvinces,
+  availableCities,
   areaMarkers,
+  highlightedAreaId,
   selectedCommodityLabel,
   asOfDate,
+  isLoading = false,
   onSelectRegion,
   onSelectProvince,
 }: PhilippinesRegionMapProps) {
   const zoomed = Boolean(selectedRegion);
+  const isNcr = selectedRegion === 'NCR';
   const selected = PH_REGION_PATHS.find((region) => region.id === selectedRegion);
-  const targetViewBox = selected?.viewBox ?? PH_MAP_VIEWBOX;
+  const provinces = selectedRegion && !isNcr ? (PH_PROVINCES_BY_REGION[selectedRegion] ?? []) : [];
+  const subunits = isNcr ? PH_NCR_CITY_PATHS : provinces;
+  const targetViewBox = isNcr ? NCR_CITY_VIEWBOX : selected?.viewBox ?? PH_MAP_VIEWBOX;
   const viewBox = useAnimatedViewBox(targetViewBox);
-  const provinces = selectedRegion ? (PH_PROVINCES_BY_REGION[selectedRegion] ?? []) : [];
+  const provinceFontSize = provinceLabelFontSize(targetViewBox, Math.max(subunits.length, 1));
+  const provinceStroke = Math.max(0.7, provinceFontSize * 0.32);
   const geoMarkers =
     areaMarkers?.filter(
       (area) => typeof area.lat === 'number' && typeof area.lng === 'number',
     ) ?? [];
   const useGeoMarkers = geoMarkers.length > 0;
   const showingMarkers = Boolean(areaMarkers?.length);
-  const markerSize = useGeoMarkers ? (zoomed ? 2.8 : 5.6) : zoomed ? 2.4 : 7.2;
+  const markerSize = useGeoMarkers ? (zoomed ? (isNcr ? 1.35 : 2.9) : 5.8) : zoomed ? (isNcr ? 1.15 : 2.5) : 7.4;
+  const hasTableHighlight = Boolean(highlightedAreaId);
+  const subunitNoun = isNcr ? 'city' : 'province';
 
   const availableRegionSet = availableRegions?.length
     ? new Set(availableRegions)
     : new Set(PH_REGION_PATHS.map((region) => region.id));
-  const availableProvinceSet = availableProvinces?.length
-    ? new Set(availableProvinces.map((name) => name.toLowerCase()))
-    : new Set(provinces.map((province) => province.id.toLowerCase()));
+  const availableSubunitSet = (() => {
+    const source = isNcr ? availableCities : availableProvinces;
+    if (!source?.length) return null;
+    return new Set(source.map((name) => name.toLowerCase()));
+  })();
 
   const scopeTitle = selectedProvince || selected?.label || selectedRegion || 'Philippines';
-  const scopeHint = selectedCommodityLabel
-    ? `Comparing ${selectedCommodityLabel} to the nationwide average.`
+  const tipText = selectedCommodityLabel
+    ? `Price pins show how ${selectedCommodityLabel} compares with the nationwide average.`
     : zoomed
       ? selectedProvince
-        ? 'Showing prices for this province. Click again to clear.'
-        : 'Click a province to filter prices.'
-      : 'Click a region to zoom in by province.';
+        ? `${isNcr ? 'City' : 'Province'} selected. Click it again to clear, or pick another ${subunitNoun}.`
+        : isNcr
+          ? 'Select a city or municipality to narrow the commodity list.'
+          : 'Select a province to narrow the commodity list.'
+      : 'Click a region to zoom in and browse provinces.';
+
+  const crumbParts = [
+    { label: 'PH', active: !zoomed },
+    selectedRegion
+      ? { label: regionShortLabel(selectedRegion), active: zoomed && !selectedProvince }
+      : null,
+    selectedProvince ? { label: selectedProvince, active: true } : null,
+  ].filter(Boolean) as { label: string; active: boolean }[];
+
+  const levelChipLabel = !zoomed ? 'National view' : isNcr ? 'City view' : 'Regional view';
 
   return (
-    <div className={`ph-map-panel${zoomed ? ' is-zoomed' : ''}${showingMarkers ? ' has-markers' : ''}`}>
+    <div
+      className={[
+        'ph-map-panel',
+        zoomed ? 'is-zoomed' : '',
+        showingMarkers ? 'has-markers' : '',
+        hasTableHighlight ? 'has-table-highlight' : '',
+        isLoading ? 'is-loading' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-busy={isLoading}
+    >
       <div className="ph-map-toolbar">
         <div className="ph-map-scope">
-          <p className="ph-map-kicker">{zoomed ? 'Region map' : 'National map'}</p>
+          <div className="ph-map-crumbs" aria-label="Map location">
+            {crumbParts.map((part, index) => (
+              <span key={`${part.label}-${index}`} className="ph-map-crumb-wrap">
+                {index > 0 ? <span className="ph-map-crumb-sep" aria-hidden>/</span> : null}
+                <span className={`ph-map-crumb${part.active ? ' is-active' : ''}`}>{part.label}</span>
+              </span>
+            ))}
+          </div>
           <h3 className="ph-map-title">{scopeTitle}</h3>
-          {zoomed && asOfDate ? <p className="ph-map-as-of">As of {asOfDate}</p> : null}
-          <p className="ph-map-hint">{scopeHint}</p>
+          <div className="ph-map-meta">
+            <span className={`ph-map-level-chip${zoomed ? ' is-region' : ' is-national'}`}>
+              <MapPinMiniIcon />
+              {levelChipLabel}
+            </span>
+            {zoomed && asOfDate ? <span className="ph-map-as-of">As of {asOfDate}</span> : null}
+          </div>
         </div>
         {zoomed ? (
           <button
@@ -119,35 +283,74 @@ export default function PhilippinesRegionMap({
               onSelectRegion('');
             }}
           >
-            Reset Map
+            <ResetIcon />
+            Reset
           </button>
         ) : null}
       </div>
 
-      {showingMarkers ? (
-        <div className="ph-map-legend" aria-label="Price comparison legend">
-          <span className="ph-map-legend-item is-above">
-            <span className="ph-map-legend-icon" aria-hidden>
-              <svg viewBox="0 0 20 20" width="14" height="14">
-                <circle cx="10" cy="10" r="9" fill="#c62828" />
-                <path d="M6.4 11.2 L10 6.2 L13.6 11.2 Z" fill="#fff" />
-              </svg>
+      <div className="ph-map-legend is-guide" aria-label={showingMarkers ? 'Map tip and price legend' : 'Map guide'}>
+        <span className="ph-map-legend-caption">Tip</span>
+        <span className="ph-map-legend-guide">{tipText}</span>
+        {showingMarkers ? (
+          <>
+            <span className="ph-map-legend-divider" aria-hidden />
+            <span className="ph-map-legend-item is-above">
+              <span className="ph-map-legend-icon" aria-hidden>
+                <svg viewBox="0 0 20 20" width="14" height="14">
+                  <circle cx="10" cy="10" r="8.2" fill="#c62828" stroke="#fff" strokeWidth="1.5" />
+                  <path d="M6.2 11.3 L10 6.4 L13.8 11.3 Z" fill="#fff" />
+                </svg>
+              </span>
+              Above
             </span>
-            Above average
-          </span>
-          <span className="ph-map-legend-item is-below">
-            <span className="ph-map-legend-icon" aria-hidden>
-              <svg viewBox="0 0 20 20" width="14" height="14">
-                <circle cx="10" cy="10" r="9" fill="#1b7a3d" />
-                <path d="M6.4 8.8 L10 13.8 L13.6 8.8 Z" fill="#fff" />
-              </svg>
+            <span className="ph-map-legend-item is-below">
+              <span className="ph-map-legend-icon" aria-hidden>
+                <svg viewBox="0 0 20 20" width="14" height="14">
+                  <circle cx="10" cy="10" r="8.2" fill="#1b7a3d" stroke="#fff" strokeWidth="1.5" />
+                  <path d="M6.2 8.7 L10 13.6 L13.8 8.7 Z" fill="#fff" />
+                </svg>
+              </span>
+              At / below
             </span>
-            At / below average
-          </span>
+          </>
+        ) : null}
+      </div>
+
+      {isNcr && zoomed ? (
+        <div className="ph-map-city-chips" aria-label="NCR cities and municipalities">
+          {PH_NCR_CITY_PATHS.map((city) => {
+            const isSelected = city.id === selectedProvince;
+            const isAvailable = isNameAvailable(city.id, availableSubunitSet);
+            return (
+              <button
+                key={city.id}
+                type="button"
+                className={[
+                  'ph-map-city-chip',
+                  isSelected ? 'is-selected' : '',
+                  !isAvailable ? 'is-empty' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                disabled={!isAvailable}
+                aria-pressed={isSelected}
+                onClick={() => onSelectProvince(isSelected ? '' : city.id)}
+              >
+                {city.label}
+              </button>
+            );
+          })}
         </div>
       ) : null}
 
-      <div className={`ph-map${zoomed ? ' is-zoomed' : ''}`}>
+      <div className={`ph-map${zoomed ? ' is-zoomed' : ''}${isLoading ? ' is-loading' : ''}${isNcr ? ' is-ncr' : ''}`}>
+        {isLoading ? (
+          <div className="ph-map-loading" role="status" aria-live="polite">
+            <span className="loading-spinner is-sm" aria-hidden />
+            <span>Updating map…</span>
+          </div>
+        ) : null}
         <svg
           className="ph-map-svg"
           viewBox={viewBox}
@@ -156,7 +359,9 @@ export default function PhilippinesRegionMap({
             selectedCommodityLabel
               ? `${selectedCommodityLabel} price comparison on the map`
               : zoomed
-                ? `${selectedRegion} by province. Click a province to filter prices.`
+                ? isNcr
+                  ? 'NCR by city. Click a city to filter prices.'
+                  : `${selectedRegion} by province. Click a province to filter prices.`
                 : 'Philippines by region. Click a region to zoom in.'
           }
         >
@@ -196,23 +401,16 @@ export default function PhilippinesRegionMap({
             );
           })}
 
-          {provinces.map((province) => {
-            const isSelected = province.id === selectedProvince;
-            const isAvailable =
-              selectedRegion === 'NCR' ||
-              !availableProvinces?.length ||
-              availableProvinceSet.has(province.id.toLowerCase()) ||
-              [...availableProvinceSet].some(
-                (name) =>
-                  name.includes(province.id.toLowerCase()) ||
-                  province.id.toLowerCase().includes(name),
-              );
+          {subunits.map((subunit) => {
+            const isSelected = subunit.id === selectedProvince;
+            const isAvailable = isNameAvailable(subunit.id, availableSubunitSet);
             return (
               <path
-                key={province.id}
-                d={province.d}
+                key={subunit.id}
+                d={subunit.d}
                 className={[
-                  'ph-map-region ph-map-province',
+                  'ph-map-region',
+                  isNcr ? 'ph-map-city' : 'ph-map-province',
                   isSelected ? 'is-selected' : '',
                   zoomed && selectedProvince && !isSelected ? 'is-dimmed' : '',
                   !isAvailable ? 'is-empty' : '',
@@ -222,20 +420,20 @@ export default function PhilippinesRegionMap({
                 tabIndex={zoomed ? 0 : -1}
                 role="button"
                 aria-pressed={isSelected}
-                aria-label={province.label}
+                aria-label={subunit.label}
                 onClick={() => {
                   if (!zoomed || !isAvailable) return;
-                  onSelectProvince(isSelected ? '' : province.id);
+                  onSelectProvince(isSelected ? '' : subunit.id);
                 }}
                 onKeyDown={(event) => {
                   if (!zoomed || !isAvailable) return;
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    onSelectProvince(isSelected ? '' : province.id);
+                    onSelectProvince(isSelected ? '' : subunit.id);
                   }
                 }}
               >
-                <title>{province.label}</title>
+                <title>{subunit.label}</title>
               </path>
             );
           })}
@@ -249,54 +447,122 @@ export default function PhilippinesRegionMap({
                   className="ph-map-label"
                   pointerEvents="none"
                 >
-                  {regionLabel(region.id)}
+                  {regionShortLabel(region.id)}
                 </text>
               ))
-            : provinces.map((province) => (
-                <text
-                  key={`${province.id}-label`}
-                  x={province.labelX}
-                  y={province.labelY}
-                  className={`ph-map-label${province.id === selectedProvince ? ' is-selected' : ''}`}
-                  pointerEvents="none"
-                >
-                  {province.label}
-                </text>
-              ))}
+            : isNcr
+              ? subunits
+                  .filter((city) => city.id === selectedProvince)
+                  .map((city) => (
+                    <text
+                      key={`${city.id}-label`}
+                      x={city.labelX}
+                      y={city.labelY - 1.6}
+                      className="ph-map-label ph-map-province-label is-selected"
+                      fontSize={2.2}
+                      strokeWidth={0.85}
+                      pointerEvents="none"
+                    >
+                      {city.label}
+                    </text>
+                  ))
+              : subunits.map((province) => {
+                  const lines = provinceLabelLines(province.label);
+                  const isSelected = province.id === selectedProvince;
+                  const fontSize = isSelected ? provinceFontSize * 1.08 : provinceFontSize;
+                  const strokeWidth = isSelected ? provinceStroke * 1.15 : provinceStroke;
+                  const lineHeight = fontSize * 1.05;
+                  const startY = province.labelY - ((lines.length - 1) * lineHeight) / 2;
+
+                  return (
+                    <text
+                      key={`${province.id}-label`}
+                      x={province.labelX}
+                      y={startY}
+                      className={[
+                        'ph-map-label ph-map-province-label',
+                        isSelected ? 'is-selected' : '',
+                        selectedProvince && !isSelected ? 'is-muted' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      fontSize={fontSize}
+                      strokeWidth={strokeWidth}
+                      pointerEvents="none"
+                    >
+                      {lines.map((line, index) => (
+                        <tspan
+                          key={`${province.id}-line-${index}`}
+                          x={province.labelX}
+                          dy={index === 0 ? 0 : lineHeight}
+                        >
+                          {line}
+                        </tspan>
+                      ))}
+                    </text>
+                  );
+                })}
 
           {showingMarkers && !useGeoMarkers && !zoomed
             ? PH_REGION_PATHS.map((region) => {
-                const area = findAreaTone(areaMarkers, region.id);
+                const area = findAreaForFeature(areaMarkers, region.id);
                 if (!area) return null;
                 const x = region.id === 'NCR' ? region.labelX + 22 : region.labelX;
                 const y = region.labelY - 11;
+                const isHighlighted = isSameAreaId(highlightedAreaId, area.id);
                 return (
                   <g
                     key={`${region.id}-marker`}
-                    className={`ph-map-marker is-${area.tone}`}
+                    className={[
+                      'ph-map-marker',
+                      `is-${area.tone}`,
+                      isHighlighted ? 'is-highlighted' : '',
+                      hasTableHighlight && !isHighlighted ? 'is-softened' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
                     transform={`translate(${x} ${y})`}
                     pointerEvents="none"
                   >
                     <title>{`${region.label}: ${formatPrice(area.avg_price)} (${area.tone === 'above' ? 'above' : 'at/below'} average)`}</title>
-                    <PriceToneIcon tone={area.tone} size={markerSize} />
+                    {isHighlighted ? (
+                      <circle className="ph-map-marker-pulse" r={markerSize * 2.15} fill="none" />
+                    ) : null}
+                    <g className="ph-map-marker-core">
+                      <PriceToneIcon tone={area.tone} size={markerSize} />
+                    </g>
                   </g>
                 );
               })
             : null}
 
           {showingMarkers && !useGeoMarkers && zoomed
-            ? provinces.map((province) => {
-                const area = findAreaTone(areaMarkers, province.id);
+            ? subunits.map((subunit) => {
+                const area = findAreaForFeature(areaMarkers, subunit.id);
                 if (!area) return null;
+                const isHighlighted = isSameAreaId(highlightedAreaId, area.id);
+                const markerOffset = isNcr ? 1.1 : 3.6;
                 return (
                   <g
-                    key={`${province.id}-marker`}
-                    className={`ph-map-marker is-${area.tone}`}
-                    transform={`translate(${province.labelX} ${province.labelY - 3.4})`}
+                    key={`${subunit.id}-marker`}
+                    className={[
+                      'ph-map-marker',
+                      `is-${area.tone}`,
+                      isHighlighted ? 'is-highlighted' : '',
+                      hasTableHighlight && !isHighlighted ? 'is-softened' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    transform={`translate(${subunit.labelX} ${subunit.labelY - markerOffset})`}
                     pointerEvents="none"
                   >
-                    <title>{`${province.label}: ${formatPrice(area.avg_price)} (${area.tone === 'above' ? 'above' : 'at/below'} average)`}</title>
-                    <PriceToneIcon tone={area.tone} size={markerSize} />
+                    <title>{`${subunit.label}: ${formatPrice(area.avg_price)} (${area.tone === 'above' ? 'above' : 'at/below'} average)`}</title>
+                    {isHighlighted ? (
+                      <circle className="ph-map-marker-pulse" r={markerSize * 2.15} fill="none" />
+                    ) : null}
+                    <g className="ph-map-marker-core">
+                      <PriceToneIcon tone={area.tone} size={markerSize} />
+                    </g>
                   </g>
                 );
               })
@@ -305,15 +571,28 @@ export default function PhilippinesRegionMap({
           {showingMarkers && useGeoMarkers
             ? geoMarkers.map((area) => {
                 const point = latLngToPhMapPoint(area.lat!, area.lng!);
+                const isHighlighted = isSameAreaId(highlightedAreaId, area.id);
                 return (
                   <g
                     key={`${area.id}-geo-marker`}
-                    className={`ph-map-marker is-${area.tone}`}
+                    className={[
+                      'ph-map-marker',
+                      `is-${area.tone}`,
+                      isHighlighted ? 'is-highlighted' : '',
+                      hasTableHighlight && !isHighlighted ? 'is-softened' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
                     transform={`translate(${point.x} ${point.y})`}
                     pointerEvents="none"
                   >
                     <title>{`${area.name}: ${formatPrice(area.avg_price)} (${area.tone === 'above' ? 'above' : 'at/below'} average)`}</title>
-                    <PriceToneIcon tone={area.tone} size={markerSize} />
+                    {isHighlighted ? (
+                      <circle className="ph-map-marker-pulse" r={markerSize * 2.4} fill="none" />
+                    ) : null}
+                    <g className="ph-map-marker-core">
+                      <PriceToneIcon tone={area.tone} size={markerSize} />
+                    </g>
                   </g>
                 );
               })

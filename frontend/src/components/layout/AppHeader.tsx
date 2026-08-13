@@ -84,6 +84,30 @@ export default function AppHeader({
 
       <div className="header-actions">
         <div className="header-status" title="Live Manila time">
+          <svg
+            className="header-status-icon"
+            viewBox="0 0 20 20"
+            width="14"
+            height="14"
+            aria-hidden
+          >
+            <circle
+              cx="10"
+              cy="10"
+              r="7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+            <path
+              d="M10 6.5V10l2.5 1.8"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
           <span className="header-status-kicker">Local time</span>
           <span className="header-status-value header-status-clock" aria-live="polite">
             {liveClock}

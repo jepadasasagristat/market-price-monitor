@@ -38,6 +38,7 @@ export type DashboardSummary = {
   regions: string[];
   categories: string[];
   provinces: string[];
+  cities: string[];
   category_counts: { name: string; rows: number }[];
   region_counts: { name: string; rows: number }[];
   top_commodities: {
@@ -95,6 +96,7 @@ export async function fetchDashboard(params?: {
   region?: string;
   category?: string;
   province?: string;
+  city?: string;
   refresh?: boolean;
 }) {
   const { data } = await client.get<DashboardSummary>('/dashboard/summary', { params });
@@ -123,7 +125,7 @@ export type CommodityMapResponse = {
   national_min: number | null;
   national_max: number | null;
   national_observations: number;
-  group_by: 'region' | 'province' | 'market';
+  group_by: 'region' | 'province' | 'city' | 'market';
   areas: CommodityMapArea[];
 };
 
@@ -133,7 +135,8 @@ export async function fetchCommodityMap(params: {
   specifications?: string;
   region?: string;
   province?: string;
-  group_by?: 'region' | 'province' | 'market';
+  city?: string;
+  group_by?: 'region' | 'province' | 'city' | 'market';
   refresh?: boolean;
 }) {
   const { data } = await client.get<CommodityMapResponse>('/dashboard/commodity-map', { params });
@@ -159,5 +162,70 @@ export async function fetchHealth() {
     data_source: string;
     row_count: number;
   }>('/health');
+  return data;
+}
+
+export type MarketSummary = {
+  id: string;
+  market: string;
+  region_name: string;
+  province: string;
+  city_municipality: string;
+  lat: number | null;
+  lng: number | null;
+  as_of_date: string;
+  commodity_count: number;
+};
+
+export type MarketsCatalogResponse = {
+  source: string;
+  meta: { total: number; source: string };
+  markets: MarketSummary[];
+  regions: string[];
+  provinces_by_region: Record<string, string[]>;
+  cities_by_province: Record<string, string[]>;
+};
+
+export type MarketCommodityPrice = {
+  category_name: string;
+  commodity: string;
+  specifications: string;
+  price: number;
+  national_avg: number;
+  regional_avg: number | null;
+  provincial_avg: number | null;
+  vs_national: number;
+  vs_regional: number | null;
+  vs_provincial: number | null;
+  tone_national: 'above' | 'below' | 'even' | null;
+  tone_regional: 'above' | 'below' | 'even' | null;
+  tone_provincial: 'above' | 'below' | 'even' | null;
+};
+
+export type MarketDetailResponse = {
+  source: string;
+  market: MarketSummary;
+  commodities: MarketCommodityPrice[];
+};
+
+export async function fetchMarketsCatalog(params?: {
+  region?: string;
+  province?: string;
+  city?: string;
+  q?: string;
+  refresh?: boolean;
+}) {
+  const { data } = await client.get<MarketsCatalogResponse>('/markets', { params });
+  return data;
+}
+
+export async function fetchMarketDetail(params: {
+  market: string;
+  region?: string;
+  province?: string;
+  city?: string;
+  refresh?: boolean;
+}) {
+  const { data } = await client.get<MarketDetailResponse>('/markets/detail', { params });
   return data;
 }

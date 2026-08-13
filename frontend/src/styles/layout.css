@@ -235,16 +235,21 @@ a {
 }
 
 .header-status {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
   min-width: 0;
-  max-width: 22rem;
+  max-width: none;
   padding: 0.4rem 0.85rem;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.08);
+}
+
+.header-status-icon {
+  flex-shrink: 0;
+  opacity: 0.85;
 }
 
 .header-status-kicker {
@@ -261,9 +266,12 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  font-size: var(--font-size-sm);
-  font-weight: 650;
-  line-height: 1.2;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.92;
+  line-height: 1.1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -271,7 +279,6 @@ a {
 
 .header-status-clock {
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
 }
 
 .app-body {
@@ -573,19 +580,17 @@ a {
   }
 
   .header-status {
-    align-items: flex-end;
-    max-width: 11.5rem;
+    max-width: min(72vw, 22rem);
     padding: 0.3rem 0.55rem;
+    gap: 0.35rem;
   }
 
   .header-status-kicker {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex-shrink: 0;
   }
 
   .header-status-clock {
-    font-size: 0.75rem;
+    min-width: 0;
   }
 
   .app-header {

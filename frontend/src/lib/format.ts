@@ -9,3 +9,7 @@ export function formatPrice(value: number | string | null | undefined) {
     maximumFractionDigits: 2,
   }).format(amount);
 }
+
+export function priceUnit(commodity: string) {
+  return /cooking\s*oil/i.test(commodity) ? '/ liter' : '/ kilogram';
+}

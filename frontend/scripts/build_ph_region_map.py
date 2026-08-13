@@ -1,4 +1,4 @@
-"""Convert NAMRIA/PSGC region and province GeoJSON into compact SVG paths."""
+"""Convert NAMRIA/PSGC region, province, and city/municipality GeoJSON into SVG paths."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ DATA = ROOT / "src" / "data"
 COUNTRY_SRC = DATA / "_ph_regions_raw.geojson"
 REGION_OUT = DATA / "phRegionPaths.ts"
 PROVINCE_OUT = DATA / "phProvincePaths.ts"
+CITY_OUT = DATA / "phCityPaths.ts"
 
 COUNTRY_URL = (
     "https://raw.githubusercontent.com/faeldon/philippines-json-maps/master/"
@@ -21,6 +22,10 @@ COUNTRY_URL = (
 PROVINCE_URL = (
     "https://raw.githubusercontent.com/faeldon/philippines-json-maps/master/"
     "2023/geojson/regions/lowres/provdists-region-{psgc}.0.001.json"
+)
+CITY_URL = (
+    "https://raw.githubusercontent.com/faeldon/philippines-json-maps/master/"
+    "2023/geojson/provdists/lowres/municities-provdist-{psgc}.0.001.json"
 )
 
 REGION_BY_PSGC = {
@@ -75,11 +80,12 @@ HEIGHT = 620.0
 PADDING = 10.0
 EPSILON_REGION = 0.035
 EPSILON_PROVINCE = 0.018
+EPSILON_CITY = 0.01
 
 
 def download(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=60) as response:
+    with urllib.request.urlopen(url, timeout=90) as response:
         dest.write_bytes(response.read())
 
 
@@ -189,12 +195,15 @@ def ring_to_path(ring: list[list[float]], project, epsilon: float) -> tuple[str,
 
 
 def feature_to_path(feature: dict, project, epsilon: float) -> tuple[str, float, float, list[tuple[float, float]]]:
+    geom = feature.get("geometry")
+    if not geom:
+        return "", 0.0, 0.0, []
     chunks: list[str] = []
     pts: list[tuple[float, float]] = []
     best_area = -1.0
     label_x = 0.0
     label_y = 0.0
-    for ring in iter_rings(feature["geometry"]):
+    for ring in iter_rings(geom):
         d, area, cx, cy, xy = ring_to_path(ring, project, epsilon)
         if not d:
             continue
@@ -225,8 +234,11 @@ def clean_province_name(raw: str) -> str:
     return name
 
 
-def write_ts_array(path: Path, header_lines: list[str], items: list[str]) -> None:
-    path.write_text("\n".join(header_lines + items) + "\n", encoding="utf-8")
+def clean_city_name(raw: str) -> str:
+    name = raw.strip()
+    name = re.sub(r"^City of\s+", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s*\(Capital\)\s*$", "", name, flags=re.IGNORECASE)
+    return name.strip()
 
 
 def main() -> None:
@@ -291,6 +303,9 @@ def main() -> None:
     REGION_OUT.write_text("\n".join(region_lines), encoding="utf-8")
 
     provinces_by_region: dict[str, list[dict]] = {}
+    cities_by_region: dict[str, dict[str, list[dict]]] = {region_id: {} for region_id in REGION_ORDER}
+    province_meta: list[tuple[str, int, str]] = []
+
     for item in ordered:
         psgc = item["psgc"]
         dest = DATA / f"_ph_prov_{psgc}.json"
@@ -302,7 +317,8 @@ def main() -> None:
         for feature in payload["features"]:
             raw_name = str(feature["properties"].get("adm2_en") or "").strip()
             name = clean_province_name(raw_name)
-            d, label_x, label_y, _pts = feature_to_path(feature, project, EPSILON_PROVINCE)
+            adm2_psgc = int(feature["properties"]["adm2_psgc"])
+            d, label_x, label_y, pts = feature_to_path(feature, project, EPSILON_PROVINCE)
             if not d or not name:
                 continue
             provinces.append(
@@ -312,12 +328,50 @@ def main() -> None:
                     "d": d,
                     "labelX": round(label_x, 1),
                     "labelY": round(label_y, 1),
+                    "viewBox": bbox_viewbox(pts, pad=12.0),
                 }
             )
+            province_meta.append((item["id"], adm2_psgc, name))
         provinces.sort(key=lambda row: row["id"])
         provinces_by_region[item["id"]] = provinces
 
+    for region_id, adm2_psgc, province_name in province_meta:
+        dest = DATA / f"_ph_city_{adm2_psgc}.json"
+        url = CITY_URL.format(psgc=adm2_psgc)
+        print(f"Downloading cities for {province_name} ({region_id})…")
+        try:
+            download(url, dest)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  skip {province_name}: {exc}")
+            cities_by_region[region_id][province_name] = []
+            continue
+        payload = json.loads(dest.read_text(encoding="utf-8"))
+        dest.unlink(missing_ok=True)
+        cities = []
+        for feature in payload["features"]:
+            raw_name = str(feature["properties"].get("adm3_en") or "").strip()
+            name = clean_city_name(raw_name)
+            d, label_x, label_y, _pts = feature_to_path(feature, project, EPSILON_CITY)
+            if not d or not name:
+                continue
+            cities.append(
+                {
+                    "id": name,
+                    "label": name,
+                    "d": d,
+                    "labelX": round(label_x, 1),
+                    "labelY": round(label_y, 1),
+                }
+            )
+        cities.sort(key=lambda row: row["id"])
+        cities_by_region[region_id][province_name] = cities
+        print(f"  {province_name}: {len(cities)} cities/municipalities")
+
     COUNTRY_SRC.unlink(missing_ok=True)
+    for leftover in DATA.glob("_ph_*.json"):
+        leftover.unlink(missing_ok=True)
+    for leftover in DATA.glob("_probe_*.json"):
+        leftover.unlink(missing_ok=True)
 
     prov_lines = [
         "export type PhProvincePath = {",
@@ -326,6 +380,7 @@ def main() -> None:
         "  d: string;",
         "  labelX: number;",
         "  labelY: number;",
+        "  viewBox: string;",
         "};",
         "",
         "export const PH_PROVINCES_BY_REGION: Record<string, PhProvincePath[]> = {",
@@ -340,7 +395,8 @@ def main() -> None:
                 f' label: {json.dumps(item["label"])},'
                 f' d: {json.dumps(item["d"])},'
                 f' labelX: {item["labelX"]},'
-                f' labelY: {item["labelY"]} '
+                f' labelY: {item["labelY"]},'
+                f' viewBox: {json.dumps(item["viewBox"])} '
                 "},"
             )
         prov_lines.append("  ],")
@@ -348,10 +404,57 @@ def main() -> None:
     prov_lines.append("")
     PROVINCE_OUT.write_text("\n".join(prov_lines), encoding="utf-8")
 
+    city_lines = [
+        "export type PhCityPath = {",
+        "  id: string;",
+        "  label: string;",
+        "  d: string;",
+        "  labelX: number;",
+        "  labelY: number;",
+        "};",
+        "",
+        "export const PH_CITIES_BY_REGION: Record<string, Record<string, PhCityPath[]>> = {",
+    ]
+    for region_id in REGION_ORDER:
+        provinces = cities_by_region.get(region_id, {})
+        city_lines.append(f"  {json.dumps(region_id)}: {{")
+        for province_name in sorted(provinces.keys(), key=str.lower):
+            items = provinces[province_name]
+            city_lines.append(f"    {json.dumps(province_name)}: [")
+            for item in items:
+                city_lines.append(
+                    "      {"
+                    f' id: {json.dumps(item["id"])},'
+                    f' label: {json.dumps(item["label"])},'
+                    f' d: {json.dumps(item["d"])},'
+                    f' labelX: {item["labelX"]},'
+                    f' labelY: {item["labelY"]} '
+                    "},"
+                )
+            city_lines.append("    ],")
+        city_lines.append("  },")
+    city_lines.append("};")
+    city_lines.append("")
+    city_lines.append(
+        "export function getCitiesForProvince(regionId: string, provinceId: string): PhCityPath[] {"
+    )
+    city_lines.append(
+        "  return PH_CITIES_BY_REGION[regionId]?.[provinceId] ?? [];"
+    )
+    city_lines.append("}")
+    city_lines.append("")
+    CITY_OUT.write_text("\n".join(city_lines), encoding="utf-8")
+
+    total_cities = sum(
+        len(cities)
+        for provinces in cities_by_region.values()
+        for cities in provinces.values()
+    )
     print(f"Wrote {REGION_OUT} ({REGION_OUT.stat().st_size} bytes)")
     print(f"Wrote {PROVINCE_OUT} ({PROVINCE_OUT.stat().st_size} bytes)")
-    for region_id, items in provinces_by_region.items():
-        print(f"  {region_id}: {len(items)} provinces")
+    print(f"Wrote {CITY_OUT} ({CITY_OUT.stat().st_size} bytes)")
+    print(f"Provinces: {sum(len(v) for v in provinces_by_region.values())}")
+    print(f"Cities/municipalities: {total_cities}")
 
 
 if __name__ == "__main__":

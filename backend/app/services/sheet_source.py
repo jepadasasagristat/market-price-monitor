@@ -141,6 +141,7 @@ def filter_rows(
     region: str | None = None,
     category: str | None = None,
     province: str | None = None,
+    city: str | None = None,
     commodity: str | None = None,
     market: str | None = None,
     q: str | None = None,
@@ -152,6 +153,7 @@ def filter_rows(
     region_n = norm(region)
     category_n = norm(category)
     province_n = norm(province)
+    city_n = norm(city)
     commodity_n = norm(commodity)
     market_n = norm(market)
     q_n = norm(q)
@@ -167,6 +169,10 @@ def filter_rows(
         if province_n:
             row_province = norm(row.get("province"))
             if province_n not in row_province and row_province not in province_n:
+                continue
+        if city_n:
+            row_city = norm(row.get("city_municipality"))
+            if city_n not in row_city and row_city not in city_n:
                 continue
         if commodity_n and commodity_n not in norm(row.get("commodity")):
             continue
@@ -223,6 +229,7 @@ def build_commodity_area_prices(
     specifications: str = "",
     region: str | None = None,
     province: str | None = None,
+    city: str | None = None,
     group_by: str | None = None,
 ) -> dict[str, Any]:
     def norm(value: str | None) -> str:
@@ -233,6 +240,7 @@ def build_commodity_area_prices(
     specs_n = norm(specifications)
     region_n = norm(region)
     province_n = norm(province)
+    city_n = norm(city)
 
     matched: list[dict[str, Any]] = []
     for row in rows:
@@ -246,10 +254,12 @@ def build_commodity_area_prices(
             continue
         matched.append(row)
 
-    if group_by in {"region", "province", "market"}:
+    if group_by in {"region", "province", "city", "market"}:
         resolved_group_by = group_by
-    elif province_n and region_n:
+    elif city_n:
         resolved_group_by = "market"
+    elif province_n and region_n:
+        resolved_group_by = "city"
     elif region_n:
         resolved_group_by = "province"
     else:
@@ -281,16 +291,28 @@ def build_commodity_area_prices(
             for row in scoped
             if province_n in norm(row.get("province")) or norm(row.get("province")) in province_n
         ]
+    if city_n:
+        scoped = [
+            row
+            for row in scoped
+            if city_n in norm(row.get("city_municipality"))
+            or norm(row.get("city_municipality")) in city_n
+        ]
 
     groups: dict[str, dict[str, Any]] = {}
     for row in scoped:
+        market = ""
+        city_name = ""
         if resolved_group_by == "market":
             market = str(row.get("market") or "").strip()
-            city = str(row.get("city_municipality") or "").strip()
+            city_name = str(row.get("city_municipality") or "").strip()
             if not market:
                 continue
-            key = f"{market}|{city}" if city else market
-            label = f"{market}, {city}" if city else market
+            key = f"{market}|{city_name}" if city_name else market
+            label = f"{market}, {city_name}" if city_name else market
+        elif resolved_group_by == "city":
+            key = str(row.get("city_municipality") or "").strip()
+            label = key
         elif resolved_group_by == "province":
             key = str(row.get("province") or "").strip()
             label = key
@@ -304,7 +326,9 @@ def build_commodity_area_prices(
             {
                 "name": label,
                 "market": market if resolved_group_by == "market" else "",
-                "city_municipality": city if resolved_group_by == "market" else "",
+                "city_municipality": city_name
+                if resolved_group_by == "market"
+                else (key if resolved_group_by == "city" else ""),
                 "prices": [],
                 "lat": None,
                 "lng": None,
@@ -336,6 +360,8 @@ def build_commodity_area_prices(
         if resolved_group_by == "market":
             area["market"] = bucket["market"]
             area["city_municipality"] = bucket["city_municipality"]
+        if resolved_group_by == "city":
+            area["city_municipality"] = bucket["city_municipality"]
         if bucket["lat"] is not None and bucket["lng"] is not None:
             area["lat"] = bucket["lat"]
             area["lng"] = bucket["lng"]
@@ -364,6 +390,7 @@ def build_dashboard(
     regions: set[str] = set()
     categories: set[str] = set()
     provinces: set[str] = set()
+    cities: set[str] = set()
     markets: set[str] = set()
     commodities: set[str] = set()
     priced = 0
@@ -381,6 +408,8 @@ def build_dashboard(
             category_counts[row["category_name"]] = category_counts.get(row["category_name"], 0) + 1
         if row.get("province"):
             provinces.add(row["province"])
+        if row.get("city_municipality"):
+            cities.add(row["city_municipality"])
         if row.get("market"):
             markets.add(f"{row.get('region_name')}|{row['market']}")
         if row.get("commodity"):
@@ -455,6 +484,7 @@ def build_dashboard(
         "regions": sorted(regions),
         "categories": sorted(categories),
         "provinces": sorted(provinces),
+        "cities": sorted(cities),
         "category_counts": [
             {"name": name, "rows": count}
             for name, count in sorted(category_counts.items(), key=lambda x: (-x[1], x[0]))
@@ -465,4 +495,298 @@ def build_dashboard(
         ],
         "top_commodities": top_commodities[:200],
         "mapped_markets": mapped_markets[:500],
+    }
+
+
+def _norm_text(value: Any) -> str:
+    return " ".join(str(value or "").upper().split())
+
+
+def _market_key(row: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            _norm_text(row.get("region_name")),
+            _norm_text(row.get("province")),
+            _norm_text(row.get("city_municipality")),
+            _norm_text(row.get("market")),
+        ]
+    )
+
+
+def list_markets(
+    rows: list[dict[str, Any]],
+    *,
+    region: str | None = None,
+    province: str | None = None,
+    city: str | None = None,
+    q: str | None = None,
+) -> dict[str, Any]:
+    region_n = _norm_text(region)
+    province_n = _norm_text(province)
+    city_n = _norm_text(city)
+    q_n = _norm_text(q)
+
+    markets_by_key: dict[str, dict[str, Any]] = {}
+    regions: set[str] = set()
+    provinces_by_region: dict[str, set[str]] = {}
+    cities_by_province: dict[str, set[str]] = {}
+
+    for row in rows:
+        market_name = str(row.get("market") or "").strip()
+        if not market_name:
+            continue
+        region_name = str(row.get("region_name") or "").strip()
+        province_name = str(row.get("province") or "").strip()
+        city_name = str(row.get("city_municipality") or "").strip()
+
+        if region_name:
+            regions.add(region_name)
+            provinces_by_region.setdefault(region_name, set())
+            if province_name:
+                provinces_by_region[region_name].add(province_name)
+                cities_by_province.setdefault(f"{region_name}|{province_name}", set())
+                if city_name:
+                    cities_by_province[f"{region_name}|{province_name}"].add(city_name)
+
+        if region_n and _norm_text(region_name) != region_n and _norm_text(row.get("region_code")) != region_n:
+            continue
+        if province_n:
+            row_province = _norm_text(province_name)
+            if province_n not in row_province and row_province not in province_n:
+                continue
+        if city_n:
+            row_city = _norm_text(city_name)
+            if city_n not in row_city and row_city not in city_n:
+                continue
+        if q_n:
+            market_n = _norm_text(market_name)
+            words = market_n.split()
+            starts = market_n.startswith(q_n) or any(word.startswith(q_n) for word in words)
+            if len(q_n) == 1:
+                if not starts:
+                    continue
+            else:
+                hay = _norm_text(" ".join([market_name, city_name, province_name, region_name]))
+                if not (starts or q_n in market_n or q_n in hay):
+                    continue
+
+        key = _market_key(row)
+        existing = markets_by_key.get(key)
+        priced = 1 if row.get("price") is not None else 0
+        as_of = str(row.get("as_of_date") or "")
+        lat = row.get("lat")
+        lng = row.get("lng")
+        if existing is None:
+            markets_by_key[key] = {
+                "id": key,
+                "market": market_name,
+                "region_name": region_name,
+                "province": province_name,
+                "city_municipality": city_name,
+                "lat": lat,
+                "lng": lng,
+                "as_of_date": as_of,
+                "commodity_count": priced,
+            }
+        else:
+            existing["commodity_count"] += priced
+            if existing.get("lat") is None and lat is not None:
+                existing["lat"] = lat
+                existing["lng"] = lng
+            if not existing.get("as_of_date") and as_of:
+                existing["as_of_date"] = as_of
+
+    markets = list(markets_by_key.values())
+    if q_n:
+        def _search_rank(item: dict[str, Any]) -> tuple[int, str, str, str, str]:
+            name = _norm_text(item["market"])
+            words = name.split()
+            if name.startswith(q_n):
+                rank = 0
+            elif any(word.startswith(q_n) for word in words):
+                rank = 1
+            elif q_n in name:
+                rank = 2
+            else:
+                rank = 3
+            return (
+                rank,
+                item["market"],
+                item["region_name"],
+                item["province"],
+                item["city_municipality"],
+            )
+
+        markets = sorted(markets, key=_search_rank)
+        if not region_n and not province_n and not city_n:
+            markets = markets[:40]
+    else:
+        markets = sorted(
+            markets,
+            key=lambda item: (
+                item["region_name"],
+                item["province"],
+                item["city_municipality"],
+                item["market"],
+            ),
+        )
+
+    return {
+        "markets": markets,
+        "regions": sorted(regions),
+        "provinces_by_region": {
+            name: sorted(values) for name, values in sorted(provinces_by_region.items())
+        },
+        "cities_by_province": {
+            name: sorted(values) for name, values in sorted(cities_by_province.items())
+        },
+    }
+
+
+def build_market_detail(
+    rows: list[dict[str, Any]],
+    *,
+    market: str,
+    region: str | None = None,
+    province: str | None = None,
+    city: str | None = None,
+) -> dict[str, Any] | None:
+    market_n = _norm_text(market)
+    if not market_n:
+        return None
+
+    region_n = _norm_text(region)
+    province_n = _norm_text(province)
+    city_n = _norm_text(city)
+
+    market_rows = []
+    for row in rows:
+        if _norm_text(row.get("market")) != market_n:
+            continue
+        if region_n and _norm_text(row.get("region_name")) != region_n and _norm_text(row.get("region_code")) != region_n:
+            continue
+        if province_n:
+            row_province = _norm_text(row.get("province"))
+            if province_n not in row_province and row_province not in province_n:
+                continue
+        if city_n:
+            row_city = _norm_text(row.get("city_municipality"))
+            if city_n not in row_city and row_city not in city_n:
+                continue
+        market_rows.append(row)
+
+    if not market_rows:
+        return None
+
+    # Prefer an exact unique market location when multiple share the name.
+    if not (region_n or province_n or city_n):
+        keys = {_market_key(row) for row in market_rows}
+        if len(keys) == 1:
+            pass
+        else:
+            # Keep all matching markets' commodities if ambiguous; still use first location.
+            pass
+
+    sample = next(
+        (row for row in market_rows if row.get("lat") is not None and row.get("lng") is not None),
+        market_rows[0],
+    )
+    region_name = str(sample.get("region_name") or "").strip()
+    province_name = str(sample.get("province") or "").strip()
+    city_name = str(sample.get("city_municipality") or "").strip()
+    market_name = str(sample.get("market") or "").strip()
+    as_of = next((str(row.get("as_of_date") or "") for row in market_rows if row.get("as_of_date")), "")
+
+    national_groups = _commodity_price_groups(rows)
+    regional_groups = _commodity_price_groups(
+        [
+            row
+            for row in rows
+            if _norm_text(row.get("region_name")) == _norm_text(region_name)
+            or _norm_text(row.get("region_code")) == _norm_text(region_name)
+        ]
+    )
+    provincial_groups = _commodity_price_groups(
+        [
+            row
+            for row in rows
+            if (
+                _norm_text(row.get("region_name")) == _norm_text(region_name)
+                or _norm_text(row.get("region_code")) == _norm_text(region_name)
+            )
+            and (
+                _norm_text(province_name) in _norm_text(row.get("province"))
+                or _norm_text(row.get("province")) in _norm_text(province_name)
+            )
+        ]
+    ) if province_name else {}
+
+    commodities: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in market_rows:
+        price = row.get("price")
+        if price is None:
+            continue
+        key = (
+            str(row.get("category_name") or "").strip(),
+            str(row.get("commodity") or "").strip(),
+            str(row.get("specifications") or "").strip(),
+        )
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+
+        national = _price_summary(national_groups.get(key, [float(price)]))
+        regional = _price_summary(regional_groups.get(key, [float(price)])) if region_name else None
+        provincial = (
+            _price_summary(provincial_groups.get(key, [float(price)]))
+            if province_name and provincial_groups
+            else None
+        )
+        market_price = float(price)
+        national_avg = float(national["avg"])
+        regional_avg = float(regional["avg"]) if regional else None
+        provincial_avg = float(provincial["avg"]) if provincial else None
+
+        def tone(avg: float | None) -> str | None:
+            if avg is None:
+                return None
+            delta = market_price - avg
+            if abs(delta) < 0.005:
+                return "even"
+            return "above" if delta > 0 else "below"
+
+        commodities.append(
+            {
+                "category_name": key[0],
+                "commodity": key[1],
+                "specifications": key[2],
+                "price": market_price,
+                "national_avg": national_avg,
+                "regional_avg": regional_avg,
+                "provincial_avg": provincial_avg,
+                "vs_national": round(market_price - national_avg, 2),
+                "vs_regional": round(market_price - regional_avg, 2) if regional_avg is not None else None,
+                "vs_provincial": round(market_price - provincial_avg, 2) if provincial_avg is not None else None,
+                "tone_national": tone(national_avg),
+                "tone_regional": tone(regional_avg),
+                "tone_provincial": tone(provincial_avg),
+            }
+        )
+
+    commodities.sort(key=lambda item: (item["category_name"], item["commodity"], item["specifications"]))
+
+    return {
+        "market": {
+            "id": _market_key(sample),
+            "market": market_name,
+            "region_name": region_name,
+            "province": province_name,
+            "city_municipality": city_name,
+            "lat": sample.get("lat"),
+            "lng": sample.get("lng"),
+            "as_of_date": as_of,
+            "commodity_count": len(commodities),
+        },
+        "commodities": commodities,
     }
