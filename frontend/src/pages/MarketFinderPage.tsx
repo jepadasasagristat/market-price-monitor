@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import {
   fetchMarketDetail,
   fetchMarketsCatalog,
@@ -176,11 +177,12 @@ function CompareResult({
 }
 
 export default function MarketFinderPage() {
-  const [region, setRegion] = useState('');
-  const [province, setProvince] = useState('');
-  const [city, setCity] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [region, setRegion] = useState(() => searchParams.get('region') || '');
+  const [province, setProvince] = useState(() => searchParams.get('province') || '');
+  const [city, setCity] = useState(() => searchParams.get('city') || '');
   const [q, setQ] = useState('');
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(() => searchParams.get('marketId') || '');
   const [category, setCategory] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -193,6 +195,7 @@ export default function MarketFinderPage() {
   const [compareSuggestionsOpen, setCompareSuggestionsOpen] = useState(false);
   const searchWrapRef = useRef<HTMLLabelElement>(null);
   const compareSearchRef = useRef<HTMLDivElement>(null);
+  const restoredFromUrl = useRef(Boolean(searchParams.get('marketId')));
 
   const filterTree = useQuery({
     queryKey: queryKeys.marketsCatalog(),
@@ -242,7 +245,24 @@ export default function MarketFinderPage() {
       (suggestionsQuery.data?.markets ?? []).find((item) => item.id === selectedId) ?? null,
     [suggestionsQuery.data, selectedId],
   );
-  const selectedMarket = selectedFromFilters ?? selectedFromSuggestions;
+  const selectedFromUrl = useMemo(() => {
+    const marketId = searchParams.get('marketId');
+    const market = searchParams.get('market');
+    if (!marketId || !market || selectedId !== marketId) return null;
+    return {
+      id: marketId,
+      market,
+      region_name: searchParams.get('region') || region || '',
+      province: searchParams.get('province') || province || '',
+      city_municipality: searchParams.get('city') || city || '',
+      lat: null,
+      lng: null,
+      as_of_date: '',
+      commodity_count: 0,
+    } satisfies MarketSummary;
+  }, [searchParams, selectedId, region, province, city]);
+  const selectedMarket =
+    selectedFromFilters ?? selectedFromSuggestions ?? selectedFromUrl;
 
   const detail = useQuery({
     queryKey: selectedMarket
@@ -347,10 +367,48 @@ export default function MarketFinderPage() {
     if (!selectedId) return;
     if (markets.some((item) => item.id === selectedId)) return;
     if (selectedFromSuggestions) return;
+    if (selectedFromUrl) return;
+    if (restoredFromUrl.current && (catalog.isFetching || filterTree.isFetching)) return;
     setSelectedId('');
-  }, [markets, selectedId, selectedFromSuggestions]);
+  }, [
+    markets,
+    selectedId,
+    selectedFromSuggestions,
+    selectedFromUrl,
+    catalog.isFetching,
+    filterTree.isFetching,
+  ]);
+
+  useEffect(() => {
+    if (!selectedMarket) {
+      if (
+        searchParams.has('marketId') ||
+        searchParams.has('market') ||
+        searchParams.has('region') ||
+        searchParams.has('province') ||
+        searchParams.has('city')
+      ) {
+        setSearchParams({}, { replace: true });
+      }
+      return;
+    }
+
+    const next = new URLSearchParams();
+    next.set('marketId', selectedMarket.id);
+    next.set('market', selectedMarket.market);
+    if (selectedMarket.region_name) next.set('region', selectedMarket.region_name);
+    if (selectedMarket.province) next.set('province', selectedMarket.province);
+    if (selectedMarket.city_municipality) next.set('city', selectedMarket.city_municipality);
+
+    const current = searchParams.toString();
+    const upcoming = next.toString();
+    if (current !== upcoming) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [selectedMarket, searchParams, setSearchParams]);
 
   const selectMarket = (item: MarketSummary) => {
+    restoredFromUrl.current = false;
     setRegion(item.region_name || '');
     setProvince(item.province || '');
     setCity(item.city_municipality || '');
@@ -518,6 +576,7 @@ export default function MarketFinderPage() {
           : null;
 
   const clearFilters = () => {
+    restoredFromUrl.current = false;
     setRegion('');
     setProvince('');
     setCity('');
@@ -526,6 +585,7 @@ export default function MarketFinderPage() {
     setQ('');
     setSuggestionsOpen(false);
     clearCompare();
+    setSearchParams({}, { replace: true });
   };
 
   const pathParts = [
