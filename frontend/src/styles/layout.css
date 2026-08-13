@@ -575,30 +575,52 @@ a {
     display: none;
   }
 
+  .header-start {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .brand {
+    min-width: 0;
+    margin-left: 0;
+    padding-left: 0;
+  }
+
   .brand-text span {
     display: none;
   }
 
+  .brand-text strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header-actions {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 52%;
+    gap: var(--space-2);
+  }
+
   .header-status {
-    max-width: min(72vw, 22rem);
-    padding: 0.3rem 0.55rem;
-    gap: 0.35rem;
+    max-width: 100%;
+    padding: 0.3rem 0.5rem;
+    gap: 0.3rem;
+    overflow: hidden;
   }
 
   .header-status-kicker {
-    flex-shrink: 0;
+    display: none;
   }
 
   .header-status-clock {
     min-width: 0;
+    font-size: 0.6rem;
   }
 
   .app-header {
     padding: 0 var(--space-3);
-    gap: var(--space-2);
-  }
-
-  .header-actions {
     gap: var(--space-2);
   }
 

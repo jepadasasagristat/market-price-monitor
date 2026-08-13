@@ -12,7 +12,19 @@ type AppHeaderProps = {
 
 const MANILA_TZ = 'Asia/Manila';
 
-function formatLiveClock(date: Date): string {
+function formatLiveClock(date: Date, compact = false): string {
+  if (compact) {
+    return new Intl.DateTimeFormat('en-PH', {
+      timeZone: MANILA_TZ,
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    }).format(date);
+  }
+
   return new Intl.DateTimeFormat('en-PH', {
     timeZone: MANILA_TZ,
     weekday: 'short',
@@ -27,14 +39,25 @@ function formatLiveClock(date: Date): string {
 }
 
 function useManilaClock(): string {
-  const [now, setNow] = useState(() => formatLiveClock(new Date()));
+  const [compact, setCompact] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
+  );
+  const [now, setNow] = useState(() => formatLiveClock(new Date(), compact));
 
   useEffect(() => {
-    const tick = () => setNow(formatLiveClock(new Date()));
+    const media = window.matchMedia('(max-width: 768px)');
+    const syncCompact = () => setCompact(media.matches);
+    syncCompact();
+    media.addEventListener('change', syncCompact);
+    return () => media.removeEventListener('change', syncCompact);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => setNow(formatLiveClock(new Date(), compact));
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [compact]);
 
   return now;
 }
