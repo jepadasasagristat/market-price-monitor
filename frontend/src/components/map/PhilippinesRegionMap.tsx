@@ -27,27 +27,72 @@ function regionShortLabel(id: string) {
 }
 
 function normalizeName(value: string) {
-  return value.trim().toLowerCase();
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function findAreaForFeature(areas: CommodityMapArea[] | undefined, featureId: string) {
+function namesEqual(a: string, b: string) {
+  return normalizeName(a) === normalizeName(b);
+}
+
+/** Explicit aliases only — never substring match (Region I ⊂ Region III, Davao ⊂ Davao del Sur). */
+const FEATURE_ALIASES: Record<string, string[]> = {
+  NCR: ['metro manila', 'national capital region'],
+  CAR: ['cordillera', 'cordillera administrative region'],
+  BARMM: ['bangsamoro', 'armm'],
+  'Region IV-A': ['calabarzon', 'region 4-a', 'region iva'],
+  'Region IV-B': ['mimaropa', 'region 4-b', 'region ivb'],
+  'Region XIII': ['caraga'],
+  'Region XII': ['soccsksargen'],
+  'Mountain Province': ['mt. province', 'mt province'],
+};
+
+function aliasTargets(featureId: string, featureLabel?: string) {
+  const keys = [featureId, featureLabel].filter(Boolean) as string[];
+  const targets = new Set(keys.map(normalizeName));
+  for (const key of keys) {
+    for (const alias of FEATURE_ALIASES[key] ?? []) {
+      targets.add(normalizeName(alias));
+    }
+  }
+  // Also allow looking up aliases keyed by the feature id itself.
+  for (const [canonical, aliases] of Object.entries(FEATURE_ALIASES)) {
+    if (namesEqual(canonical, featureId) || (featureLabel && namesEqual(canonical, featureLabel))) {
+      aliases.forEach((alias) => targets.add(normalizeName(alias)));
+      targets.add(normalizeName(canonical));
+    }
+  }
+  return targets;
+}
+
+function findAreaForFeature(
+  areas: CommodityMapArea[] | undefined,
+  featureId: string,
+  featureLabel?: string,
+) {
   if (!areas?.length) return null;
-  const target = normalizeName(featureId);
+  const targets = aliasTargets(featureId, featureLabel);
   return (
-    areas.find((area) => normalizeName(area.id) === target) ??
-    areas.find((area) => normalizeName(area.name) === target) ??
-    areas.find((area) => {
-      const id = normalizeName(area.id);
-      const name = normalizeName(area.name);
-      return id.includes(target) || target.includes(id) || name.includes(target) || target.includes(name);
-    }) ??
+    areas.find((area) => targets.has(normalizeName(area.id))) ??
+    areas.find((area) => targets.has(normalizeName(area.name))) ??
     null
   );
 }
 
-function isSameAreaId(highlightedAreaId: string | null | undefined, areaId: string) {
+function isHighlightedMarker(
+  highlightedAreaId: string | null | undefined,
+  area: CommodityMapArea,
+  featureId?: string,
+  featureLabel?: string,
+) {
   if (!highlightedAreaId) return false;
-  return normalizeName(highlightedAreaId) === normalizeName(areaId);
+  const highlight = normalizeName(highlightedAreaId);
+  if (normalizeName(area.id) === highlight || normalizeName(area.name) === highlight) {
+    return true;
+  }
+  if (featureId && aliasTargets(featureId, featureLabel).has(highlight)) {
+    return true;
+  }
+  return false;
 }
 
 function parseViewBoxSize(value: string) {
@@ -119,9 +164,11 @@ function provinceLabelLines(label: string) {
 
 function isNameAvailable(name: string, available: Set<string> | null) {
   if (!available) return true;
-  const target = name.toLowerCase();
-  if (available.has(target)) return true;
-  return [...available].some((entry) => entry.includes(target) || target.includes(entry));
+  const targets = aliasTargets(name);
+  for (const entry of available) {
+    if (targets.has(entry) || targets.has(normalizeName(entry))) return true;
+  }
+  return false;
 }
 
 function PriceToneIcon({ tone, size }: { tone: 'above' | 'below'; size: number }) {
@@ -499,20 +546,29 @@ export default function PhilippinesRegionMap({
                 })}
 
           {showingMarkers && !useGeoMarkers && !zoomed
-            ? PH_REGION_PATHS.map((region) => {
-                const area = findAreaForFeature(areaMarkers, region.id);
-                if (!area) return null;
-                const x = region.id === 'NCR' ? region.labelX + 22 : region.labelX;
-                const y = region.labelY - 11;
-                const isHighlighted = isSameAreaId(highlightedAreaId, area.id);
-                return (
+            ? (() => {
+                const markers = PH_REGION_PATHS.flatMap((region) => {
+                  const area = findAreaForFeature(areaMarkers, region.id, region.label);
+                  if (!area) return [];
+                  const x = region.id === 'NCR' ? region.labelX + 22 : region.labelX;
+                  const y = region.labelY - 11;
+                  const highlighted = isHighlightedMarker(
+                    highlightedAreaId,
+                    area,
+                    region.id,
+                    region.label,
+                  );
+                  return [{ region, area, x, y, highlighted }];
+                });
+                markers.sort((a, b) => Number(a.highlighted) - Number(b.highlighted));
+                return markers.map(({ region, area, x, y, highlighted }) => (
                   <g
                     key={`${region.id}-marker`}
                     className={[
                       'ph-map-marker',
                       `is-${area.tone}`,
-                      isHighlighted ? 'is-highlighted' : '',
-                      hasTableHighlight && !isHighlighted ? 'is-softened' : '',
+                      highlighted ? 'is-highlighted' : '',
+                      hasTableHighlight && !highlighted ? 'is-softened' : '',
                     ]
                       .filter(Boolean)
                       .join(' ')}
@@ -520,31 +576,40 @@ export default function PhilippinesRegionMap({
                     pointerEvents="none"
                   >
                     <title>{`${region.label}: ${formatPrice(area.avg_price)} (${area.tone === 'above' ? 'above' : 'at/below'} average)`}</title>
-                    {isHighlighted ? (
+                    {highlighted ? (
                       <circle className="ph-map-marker-pulse" r={markerSize * 2.15} fill="none" />
                     ) : null}
                     <g className="ph-map-marker-core">
                       <PriceToneIcon tone={area.tone} size={markerSize} />
                     </g>
                   </g>
-                );
-              })
+                ));
+              })()
             : null}
 
           {showingMarkers && !useGeoMarkers && zoomed
-            ? subunits.map((subunit) => {
-                const area = findAreaForFeature(areaMarkers, subunit.id);
-                if (!area) return null;
-                const isHighlighted = isSameAreaId(highlightedAreaId, area.id);
-                const markerOffset = isNcr ? 1.1 : 3.6;
-                return (
+            ? (() => {
+                const markers = subunits.flatMap((subunit) => {
+                  const area = findAreaForFeature(areaMarkers, subunit.id, subunit.label);
+                  if (!area) return [];
+                  const highlighted = isHighlightedMarker(
+                    highlightedAreaId,
+                    area,
+                    subunit.id,
+                    subunit.label,
+                  );
+                  const markerOffset = isNcr ? 1.1 : 3.6;
+                  return [{ subunit, area, highlighted, markerOffset }];
+                });
+                markers.sort((a, b) => Number(a.highlighted) - Number(b.highlighted));
+                return markers.map(({ subunit, area, highlighted, markerOffset }) => (
                   <g
                     key={`${subunit.id}-marker`}
                     className={[
                       'ph-map-marker',
                       `is-${area.tone}`,
-                      isHighlighted ? 'is-highlighted' : '',
-                      hasTableHighlight && !isHighlighted ? 'is-softened' : '',
+                      highlighted ? 'is-highlighted' : '',
+                      hasTableHighlight && !highlighted ? 'is-softened' : '',
                     ]
                       .filter(Boolean)
                       .join(' ')}
@@ -552,29 +617,33 @@ export default function PhilippinesRegionMap({
                     pointerEvents="none"
                   >
                     <title>{`${subunit.label}: ${formatPrice(area.avg_price)} (${area.tone === 'above' ? 'above' : 'at/below'} average)`}</title>
-                    {isHighlighted ? (
+                    {highlighted ? (
                       <circle className="ph-map-marker-pulse" r={markerSize * 2.15} fill="none" />
                     ) : null}
                     <g className="ph-map-marker-core">
                       <PriceToneIcon tone={area.tone} size={markerSize} />
                     </g>
                   </g>
-                );
-              })
+                ));
+              })()
             : null}
 
           {showingMarkers && useGeoMarkers
-            ? geoMarkers.map((area) => {
-                const point = latLngToPhMapPoint(area.lat!, area.lng!);
-                const isHighlighted = isSameAreaId(highlightedAreaId, area.id);
-                return (
+            ? (() => {
+                const markers = geoMarkers.flatMap((area) => {
+                  const point = latLngToPhMapPoint(area.lat!, area.lng!);
+                  const highlighted = isHighlightedMarker(highlightedAreaId, area);
+                  return [{ area, point, highlighted }];
+                });
+                markers.sort((a, b) => Number(a.highlighted) - Number(b.highlighted));
+                return markers.map(({ area, point, highlighted }) => (
                   <g
                     key={`${area.id}-geo-marker`}
                     className={[
                       'ph-map-marker',
                       `is-${area.tone}`,
-                      isHighlighted ? 'is-highlighted' : '',
-                      hasTableHighlight && !isHighlighted ? 'is-softened' : '',
+                      highlighted ? 'is-highlighted' : '',
+                      hasTableHighlight && !highlighted ? 'is-softened' : '',
                     ]
                       .filter(Boolean)
                       .join(' ')}
@@ -582,15 +651,15 @@ export default function PhilippinesRegionMap({
                     pointerEvents="none"
                   >
                     <title>{`${area.name}: ${formatPrice(area.avg_price)} (${area.tone === 'above' ? 'above' : 'at/below'} average)`}</title>
-                    {isHighlighted ? (
+                    {highlighted ? (
                       <circle className="ph-map-marker-pulse" r={markerSize * 2.4} fill="none" />
                     ) : null}
                     <g className="ph-map-marker-core">
                       <PriceToneIcon tone={area.tone} size={markerSize} />
                     </g>
                   </g>
-                );
-              })
+                ));
+              })()
             : null}
         </svg>
       </div>

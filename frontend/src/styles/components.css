@@ -536,13 +536,13 @@
 }
 
 .ph-map-marker.is-softened {
-  opacity: 0.28;
-  filter: grayscale(0.35) drop-shadow(0 1px 1px rgba(26, 46, 26, 0.12));
+  opacity: 0.22;
+  filter: grayscale(0.45) drop-shadow(0 1px 1px rgba(26, 46, 26, 0.1));
 }
 
 .ph-map-marker.is-highlighted {
   opacity: 1;
-  filter: drop-shadow(0 2px 4px rgba(6, 64, 43, 0.35));
+  filter: drop-shadow(0 2px 5px rgba(6, 64, 43, 0.42));
 }
 
 .ph-map-marker-core {
